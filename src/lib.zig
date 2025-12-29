@@ -474,30 +474,85 @@ pub const Parser = struct {
     }
 
     /// Extract signature for container types (struct, union, enum)
-    /// Stops just before the opening brace
+    /// Includes the body with fields, stops before first method
     fn extractContainerSignature(self: *Parser, first_tok: u32, init_node: Ast.Node.OptionalIndex) Error![]const u8 {
         if (init_node == .none) {
             return try self.allocator.dupe(u8, "");
         }
 
-        // Find the container's opening brace
         var buf: [2]Ast.Node.Index = undefined;
         const init_idx: Ast.Node.Index = @enumFromInt(@intFromEnum(init_node));
-        if (self.ast.fullContainerDecl(&buf, init_idx)) |container| {
-            // The opening brace is right after the main_token (struct/union/enum keyword)
-            const tags = self.ast.tokens.items(.tag);
-            var tok = container.ast.main_token;
-            while (tok < tags.len and tags[tok] != .l_brace) : (tok += 1) {}
+        const container = self.ast.fullContainerDecl(&buf, init_idx) orelse {
+            const init_first_tok = self.ast.firstToken(init_idx);
+            return try self.extractSourceLines(first_tok, init_first_tok);
+        };
 
-            // Extract from first_tok to just before l_brace
-            if (tok > first_tok) {
-                return try self.extractSourceRange(first_tok, tok - 1);
+        const tags = self.ast.tokens.items(.tag);
+        const starts = self.ast.tokens.items(.start);
+
+        // Find opening brace
+        var brace_tok = container.ast.main_token;
+        while (brace_tok < tags.len and tags[brace_tok] != .l_brace) : (brace_tok += 1) {}
+
+        // Scan for first function (method) - we want to stop before it
+        var end_tok = brace_tok;
+        var brace_depth: u32 = 0;
+        var found_fn = false;
+
+        var tok = brace_tok;
+        while (tok < tags.len) : (tok += 1) {
+            if (tags[tok] == .l_brace) {
+                brace_depth += 1;
+            } else if (tags[tok] == .r_brace) {
+                if (brace_depth == 1) {
+                    // End of container - include closing brace
+                    end_tok = tok;
+                    break;
+                }
+                brace_depth -= 1;
+            } else if (brace_depth == 1 and tags[tok] == .keyword_fn) {
+                // Found a method at container level - stop before it
+                // Back up to find a good cut point (before any doc comments or pub)
+                found_fn = true;
+                var cut_tok = tok;
+                while (cut_tok > brace_tok) {
+                    const prev = cut_tok - 1;
+                    if (tags[prev] == .keyword_pub or tags[prev] == .doc_comment) {
+                        cut_tok = prev;
+                    } else {
+                        break;
+                    }
+                }
+                // Find the last field before this point
+                end_tok = cut_tok - 1;
+                // Skip back past whitespace/commas to find actual content
+                while (end_tok > brace_tok and (tags[end_tok] == .comma or
+                    self.source[starts[end_tok]] == '\n' or
+                    self.source[starts[end_tok]] == ' '))
+                {
+                    end_tok -= 1;
+                }
+                break;
             }
         }
 
-        // Fallback: extract to init node's first token
-        const init_first_tok = self.ast.firstToken(init_idx);
-        return try self.extractSourceLines(first_tok, init_first_tok);
+        // Extract source and add closing brace if we stopped early
+        const start_offset = starts[first_tok];
+        var end_offset = starts[end_tok];
+        const tok_slice = self.ast.tokenSlice(end_tok);
+        end_offset += @intCast(tok_slice.len);
+
+        var result: std.ArrayList(u8) = .empty;
+        errdefer result.deinit(self.allocator);
+
+        try result.appendSlice(self.allocator, std.mem.trim(u8, self.source[start_offset..end_offset], " \n\r\t"));
+
+        if (found_fn) {
+            // Add closing brace since we stopped before methods
+            try result.appendSlice(self.allocator, "\n}");
+        }
+
+        return try result.toOwnedSlice(self.allocator);
     }
 
     /// Extract signature for non-container variable declarations

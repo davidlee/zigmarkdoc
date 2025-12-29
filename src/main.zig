@@ -190,10 +190,28 @@ fn renderMarkdown(allocator: std.mem.Allocator, module: *const Module, config: C
         try writer.print("{s}\n\n", .{doc});
     }
 
-    // Group declarations by category
+    // Render imports as a single grouped block (concise)
+    var has_imports = false;
+    for (module.declarations) |decl| {
+        if (decl.category == .import) {
+            if (!has_imports) {
+                try writer.print("{s} Imports\n\n```zig\n", .{headerPrefix(config.header_level + 1)});
+                has_imports = true;
+            }
+            try writer.print("{s}\n", .{decl.signature});
+        }
+    }
+    if (has_imports) {
+        try writer.writeAll("```\n\n");
+    }
+
+    // Render non-import declarations grouped by category
     var current_category: ?lib.Category = null;
 
     for (module.declarations) |decl| {
+        // Skip imports (already rendered above)
+        if (decl.category == .import) continue;
+
         // Print category header if changed
         if (current_category == null or current_category.? != decl.category) {
             current_category = decl.category;
@@ -239,29 +257,40 @@ fn renderDeclaration(writer: anytype, allocator: std.mem.Allocator, decl: *const
             }
         }
 
-        // Render fields/variants as a table if present
+        // For structs/unions, fields are shown in the code block - no table needed
+        // For enums/errors without methods, variants are also in the code block
+        // Only show variant list/table for enums/errors if they have doc comments
+        // that wouldn't be visible in the signature
         if (has_fields) {
-            // Use appropriate label based on container type
             const is_variant_type = decl.category == .@"enum" or decl.category == .error_set;
-            const label = if (is_variant_type) "Variant" else "Field";
 
-            try writer.print("| {s} | Type | Description |\n", .{label});
-            try writer.writeAll("|-------|------|-------------|\n");
-            for (decl.members) |member| {
-                if (member.category == .constant and std.mem.indexOfAny(u8, member.signature, "=") == null) {
-                    // Parse field signature: "name: Type" or "name: Type,"
-                    const sig = std.mem.trimRight(u8, member.signature, ",");
-                    if (std.mem.indexOf(u8, sig, ": ")) |colon_pos| {
-                        const field_type = sig[colon_pos + 2 ..];
-                        const doc = member.doc_comment orelse "";
-                        try writer.print("| `{s}` | `{s}` | {s} |\n", .{ member.name, field_type, doc });
-                    } else {
-                        const doc = member.doc_comment orelse "";
-                        try writer.print("| `{s}` | | {s} |\n", .{ member.name, doc });
+            if (is_variant_type) {
+                // Check if any variants have doc comments
+                var any_docs = false;
+                for (decl.members) |member| {
+                    if (member.category == .constant and std.mem.indexOfAny(u8, member.signature, "=") == null) {
+                        if (member.doc_comment != null) {
+                            any_docs = true;
+                            break;
+                        }
                     }
                 }
+
+                // Only show table if there are doc comments (they're in the source anyway for ///,
+                // but this catches cases where we parsed them)
+                if (any_docs) {
+                    try writer.writeAll("| Variant | Description |\n");
+                    try writer.writeAll("|---------|-------------|\n");
+                    for (decl.members) |member| {
+                        if (member.category == .constant and std.mem.indexOfAny(u8, member.signature, "=") == null) {
+                            const doc = member.doc_comment orelse "";
+                            try writer.print("| `{s}` | {s} |\n", .{ member.name, doc });
+                        }
+                    }
+                    try writer.writeAll("\n");
+                }
             }
-            try writer.writeAll("\n");
+            // For structs/unions: fields are visible in the code block, skip table
         }
 
         // Render methods as nested declarations
