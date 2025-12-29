@@ -1,0 +1,7 @@
+.{
+    .name = .zigmarkdoc,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{""},
+    .fingerprint = 0x17f3f57b6add91b1,
+}

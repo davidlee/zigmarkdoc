@@ -1,0 +1,6 @@
+/.zig-cache
+/.claude
+/zig-out
+/.direnv
+/gomarkdoc
+
