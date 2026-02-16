@@ -87,6 +87,7 @@ const Config = struct {
     include_private: bool = false,
     no_source: bool = false,
     header_level: u8 = 1,
+    individual_headings: bool = false,
 };
 
 fn parseArgs(args: []const []const u8) !Config {
@@ -116,6 +117,8 @@ fn parseArgs(args: []const []const u8) !Config {
             config.include_private = true;
         } else if (std.mem.eql(u8, arg, "--no-source")) {
             config.no_source = true;
+        } else if (std.mem.eql(u8, arg, "--individual-headings")) {
+            config.individual_headings = true;
         } else if (std.mem.eql(u8, arg, "--header-level")) {
             i += 1;
             if (i >= args.len) {
@@ -167,6 +170,7 @@ fn printHelp() void {
         \\  --check                   Exit 1 if output differs from existing file
         \\  -p, --include-private     Include non-pub declarations
         \\  --no-source               Omit source code blocks
+        \\  --individual-headings     Use verbose format with heading per declaration
         \\  --header-level <N>        Starting header level (default: 1)
         \\  -V, --version             Print version
         \\  -h, --help                Print help
@@ -205,23 +209,124 @@ fn renderMarkdown(allocator: std.mem.Allocator, module: *const Module, config: C
         try writer.writeAll("```\n\n");
     }
 
-    // Render non-import declarations grouped by category
-    var current_category: ?lib.Category = null;
+    // Render non-import declarations
+    if (config.individual_headings) {
+        // Verbose format: individual headings for each declaration
+        var current_category: ?lib.Category = null;
 
-    for (module.declarations) |decl| {
-        // Skip imports (already rendered above)
-        if (decl.category == .import) continue;
+        for (module.declarations) |decl| {
+            if (decl.category == .import) continue;
 
-        // Print category header if changed
-        if (current_category == null or current_category.? != decl.category) {
-            current_category = decl.category;
-            try writer.print("{s} {s}\n\n", .{ headerPrefix(config.header_level + 1), categoryName(decl.category) });
+            if (current_category == null or current_category.? != decl.category) {
+                current_category = decl.category;
+                try writer.print("{s} {s}\n\n", .{ headerPrefix(config.header_level + 1), categoryName(decl.category) });
+            }
+
+            try renderDeclaration(writer, allocator, &decl, config, config.header_level + 2);
         }
-
-        try renderDeclaration(writer, allocator, &decl, config, config.header_level + 2);
+    } else {
+        // Compact format: grouped code blocks per category
+        try renderCompact(writer, module, config);
     }
 
     return try output.toOwnedSlice(allocator);
+}
+
+fn renderCompact(writer: anytype, module: *const Module, config: Config) !void {
+    var current_category: ?lib.Category = null;
+    var category_started = false;
+
+    for (module.declarations, 0..) |decl, i| {
+        if (decl.category == .import) continue;
+
+        // Start new category section
+        if (current_category == null or current_category.? != decl.category) {
+            // Close previous category's code block
+            if (category_started) {
+                try writer.writeAll("```\n\n");
+            }
+
+            current_category = decl.category;
+            try writer.print("{s} {s}\n\n", .{ headerPrefix(config.header_level + 1), categoryName(decl.category) });
+
+            if (!config.no_source) {
+                try writer.writeAll("```zig\n");
+                category_started = true;
+            } else {
+                category_started = false;
+            }
+        }
+
+        // Render declaration in compact form
+        if (config.no_source) {
+            // Just show name and doc
+            if (decl.doc_comment) |doc| {
+                try writer.print("{s}\n\n", .{doc});
+            }
+            try writer.print("`{s}`\n\n", .{decl.name});
+        } else {
+            // Add spacing between declarations
+            if (i > 0 and module.declarations[i - 1].category == decl.category) {
+                try writer.writeAll("\n");
+            }
+
+            // Doc comment as /// prefix
+            if (decl.doc_comment) |doc| {
+                var lines = std.mem.splitScalar(u8, doc, '\n');
+                while (lines.next()) |line| {
+                    try writer.print("/// {s}\n", .{line});
+                }
+            }
+
+            // Check if we have methods to render inside the container
+            const has_methods = blk: {
+                for (decl.members) |member| {
+                    if (member.category == .function) break :blk true;
+                }
+                break :blk false;
+            };
+
+            if (has_methods) {
+                // Container with methods: strip closing brace, add methods, then close
+                const sig = decl.signature;
+                const trimmed = std.mem.trimRight(u8, sig, " \n\r\t");
+                // Strip final } if present
+                if (std.mem.endsWith(u8, trimmed, "}")) {
+                    try writer.print("{s}\n", .{trimmed[0 .. trimmed.len - 1]});
+                } else {
+                    try writer.print("{s}\n", .{sig});
+                }
+
+                // Render methods inside
+                for (decl.members) |member| {
+                    if (member.category == .function) {
+                        try writer.writeAll("\n");
+                        if (member.doc_comment) |doc| {
+                            var lines = std.mem.splitScalar(u8, doc, '\n');
+                            while (lines.next()) |line| {
+                                try writer.print("  /// {s}\n", .{line});
+                            }
+                        }
+                        var sig_lines = std.mem.splitScalar(u8, member.signature, '\n');
+                        while (sig_lines.next()) |line| {
+                            try writer.print("  {s}\n", .{line});
+                        }
+                    }
+                }
+
+                // Close container
+                try writer.writeAll("}\n");
+            } else {
+                // No methods: render signature as-is
+                try writer.print("{s}\n", .{decl.signature});
+            }
+        }
+    }
+
+    // Close final category's code block
+    if (category_started) {
+        try writer.writeAll("```\n\n");
+    }
 }
 
 fn renderDeclaration(writer: anytype, allocator: std.mem.Allocator, decl: *const lib.Declaration, config: Config, level: u8) !void {

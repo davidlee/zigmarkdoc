@@ -70,7 +70,9 @@ zigmarkdoc src/ --exclude 'test_*.zig' --exclude 'build.zig'
 
 ### File-Level Structure
 
-Unlike Go (where all files in a directory merge into one package), Zig's module system treats each file as a distinct namespace. zigmarkdoc preserves this:
+Unlike Go (where all files in a directory merge into one package), Zig's module system treats each file as a distinct namespace. zigmarkdoc preserves this.
+
+By default, zigmarkdoc uses a **compact format** that groups declarations by category into single code blocks, maximizing token efficiency for LLM consumption:
 
 ```markdown
 # module_name
@@ -79,62 +81,32 @@ Top-level doc comment for the file (if present).
 
 ## Structs
 
-### `MyStruct`
-
-Doc comment for struct.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | `[]const u8` | Field doc comment |
-| `count` | `usize` | Inline comment |
-
-### `MyStruct.init`
-
 ```zig
-pub fn init(allocator: std.mem.Allocator) !MyStruct
-```
+/// Doc comment for struct.
+pub const MyStruct = struct {
+    name: []const u8,
+    count: usize,
 
-Doc comment for method.
+    /// Doc comment for method.
+    pub fn init(allocator: std.mem.Allocator) !MyStruct
+}
+```
 
 ## Functions
 
-### `processItem`
-
 ```zig
+/// Doc comment for function.
 pub fn processItem(item: Item, options: Options) !Result
 ```
 
-Doc comment for function.
-
 ## Constants
-
-### `VERSION`
 
 ```zig
 pub const VERSION: []const u8 = "1.0.0"
 ```
-
-## Types
-
-### `Callback`
-
-```zig
-pub const Callback = fn (ctx: *anyopaque) void
 ```
 
-## Errors
-
-### `Error`
-
-```zig
-pub const Error = error{
-    InvalidInput,
-    OutOfMemory,
-    Timeout,
-};
-```
-```
-```
+For the legacy verbose format with individual headings per declaration, use `--individual-headings`.
 
 ### Ordering
 
@@ -181,6 +153,7 @@ This is arguably a feature: regular comments describe *implementation*, while do
 | `--check` | | Exit 1 if output differs from existing file | v0.1 |
 | `--include-private` | `-p` | Include non-`pub` declarations | v0.1 |
 | `--no-source` | | Omit source code blocks, show signatures only | v0.1 |
+| `--individual-headings` | | Use verbose format with heading per declaration | v0.1 |
 | `--format` | `-f` | Output format: `markdown` (default), `json` | v0.1 |
 | `--header-level` | | Starting header level (default: 1) | v0.1 |
 | `--version` | `-V` | Print version | v0.1 |
