@@ -265,8 +265,8 @@ fn renderCompact(writer: anytype, module: *const Module, config: Config) !void {
             }
             try writer.print("`{s}`\n\n", .{decl.name});
         } else {
-            // Add spacing between declarations
-            if (i > 0 and module.declarations[i - 1].category == decl.category) {
+            // Add spacing between declarations (constants are dense lookup tables; no blank line needed)
+            if (i > 0 and module.declarations[i - 1].category == decl.category and decl.category != .constant) {
                 try writer.writeAll("\n");
             }
 
@@ -300,7 +300,10 @@ fn renderCompact(writer: anytype, module: *const Module, config: Config) !void {
                 // Render methods inside
                 for (decl.members) |member| {
                     if (member.category == .function) {
-                        try writer.writeAll("\n");
+                        // /// doc comments already serve as visual delimiters
+                        if (member.doc_comment == null) {
+                            try writer.writeAll("\n");
+                        }
                         if (member.doc_comment) |doc| {
                             var lines = std.mem.splitScalar(u8, doc, '\n');
                             while (lines.next()) |line| {
@@ -436,4 +439,79 @@ fn categoryName(cat: lib.Category) []const u8 {
 
 test {
     _ = lib;
+}
+
+test "compact: no blank lines between constants" {
+    const source =
+        \\pub const alpha_val = 1;
+        \\pub const beta_val = 2;
+        \\pub const gamma_val = 3;
+    ;
+
+    var parser = try lib.Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    const config = Config{ .input_path = "test.zig" };
+    const output = try renderMarkdown(std.testing.allocator, &module, config);
+    defer std.testing.allocator.free(output);
+
+    // Constants should be packed without blank lines between them
+    try std.testing.expect(std.mem.indexOf(u8, output,
+        \\pub const alpha_val = 1;
+        \\pub const beta_val = 2;
+        \\pub const gamma_val = 3;
+    ) != null);
+}
+
+test "compact: blank lines preserved between functions" {
+    const source =
+        \\pub fn alpha() void {}
+        \\pub fn beta() void {}
+    ;
+
+    var parser = try lib.Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    const config = Config{ .input_path = "test.zig" };
+    const output = try renderMarkdown(std.testing.allocator, &module, config);
+    defer std.testing.allocator.free(output);
+
+    // Functions should still have blank lines between them
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub fn alpha() void\n\npub fn beta() void") != null);
+}
+
+test "compact: no blank line before documented method" {
+    const source =
+        \\pub const MyStruct = struct {
+        \\  name: []const u8,
+        \\
+        \\  pub fn first(self: *MyStruct) void {}
+        \\
+        \\  /// Documented method
+        \\  pub fn second(self: *MyStruct) void {}
+        \\};
+    ;
+
+    var parser = try lib.Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    const config = Config{ .input_path = "test.zig" };
+    const output = try renderMarkdown(std.testing.allocator, &module, config);
+    defer std.testing.allocator.free(output);
+
+    // Documented method: /// directly follows previous method (no blank line)
+    try std.testing.expect(std.mem.indexOf(u8, output,
+        \\  pub fn first(self: *MyStruct) void
+        \\  /// Documented method
+        \\  pub fn second(self: *MyStruct) void
+    ) != null);
+
+    // Undocumented method should still have blank line before it
+    try std.testing.expect(std.mem.indexOf(u8, output, "\n\n  pub fn first") != null);
 }

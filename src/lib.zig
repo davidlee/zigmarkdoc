@@ -448,6 +448,7 @@ pub const Parser = struct {
         // Reverse to get correct order
         std.mem.reverse(u32, doc_tokens.items);
 
+        var prev_line: []const u8 = "";
         for (doc_tokens.items) |tok| {
             const start = starts[tok];
             const end = if (tok + 1 < starts.len) starts[tok + 1] else self.source.len;
@@ -457,6 +458,10 @@ pub const Parser = struct {
             const content = std.mem.trimLeft(u8, line, "/");
             const trimmed = std.mem.trimLeft(u8, content, " ");
             const final = std.mem.trimRight(u8, trimmed, " \n\r");
+
+            // Skip consecutive duplicate lines (dedup bug fix)
+            if (final.len > 0 and std.mem.eql(u8, final, prev_line)) continue;
+            prev_line = final;
 
             if (doc_lines.items.len > 0) {
                 try doc_lines.append(self.allocator, '\n');
@@ -742,6 +747,59 @@ test "sorting order" {
     try std.testing.expectEqualStrings("MyStruct", module.declarations[2].name);
     try std.testing.expectEqualStrings("alpha", module.declarations[3].name);
     try std.testing.expectEqualStrings("beta", module.declarations[4].name);
+}
+
+test "deduplicate consecutive identical doc comment lines" {
+    const source =
+        \\/// Add enemy and create default engagement.
+        \\/// Add enemy and create default engagement.
+        \\pub fn addEnemy() void {}
+    ;
+
+    var parser = try Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), module.declarations.len);
+    try std.testing.expectEqualStrings(
+        "Add enemy and create default engagement.",
+        module.declarations[0].doc_comment.?,
+    );
+}
+
+test "preserve distinct consecutive doc comment lines" {
+    const source =
+        \\/// First line
+        \\/// Second line
+        \\pub fn foo() void {}
+    ;
+
+    var parser = try Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    try std.testing.expectEqualStrings("First line\nSecond line", module.declarations[0].doc_comment.?);
+}
+
+test "preserve blank doc comment lines" {
+    const source =
+        \\/// First paragraph
+        \\///
+        \\/// Second paragraph
+        \\pub fn foo() void {}
+    ;
+
+    var parser = try Parser.init(std.testing.allocator, source, false);
+    defer parser.deinit();
+
+    var module = try parser.parse("test.zig");
+    defer module.deinit();
+
+    try std.testing.expectEqualStrings("First paragraph\n\nSecond paragraph", module.declarations[0].doc_comment.?);
 }
 
 test "container doc comment" {
