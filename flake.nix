@@ -13,42 +13,33 @@
     zls-overlay,
   }:
     flake-utils.lib.eachSystem ["x86_64-linux"] (system: let
-      # Refer to https://github.com/mitchellh/zig-overlay if you want to use a specific version of Zig
-      zigPackage = zig-overlay.packages.${system}."default"; #"master";
+      zigPackage = zig-overlay.packages.${system}."default";
       pkgs = nixpkgs.legacyPackages.${system};
-      packageName = "zsdl3";
     in {
       formatter = pkgs.nixpkgs-fmt;
 
+      packages.default = pkgs.stdenv.mkDerivation {
+        pname = "zigmarkdoc";
+        version = "0.0.1";
+        src = ./.;
+
+        nativeBuildInputs = [zigPackage];
+
+        dontConfigure = true;
+        dontInstall = true;
+
+        buildPhase = ''
+          export XDG_CACHE_HOME="$TMPDIR"
+          zig build --prefix $out -Doptimize=ReleaseSafe
+        '';
+      };
+
       devShells.default = pkgs.mkShell {
-        name = packageName;
-        packages =
-          #with pkgs;
-          [
-            # vulkan-validation-layers
-            zls-overlay.packages.x86_64-linux."0.15.0"
-            zigPackage
-          ];
-        # LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
-        #   mesa
-        #   alsa-lib
-        #   libdecor
-        #   libusb1
-        #   libxkbcommon
-        #   vulkan-loader
-        #   wayland
-        #   xorg.libX11
-        #   xorg.libXext
-        #   xorg.libXi
-        #   xorg.libXrandr
-        #   xorg.libXinerama
-        #   xorg.libXcursor
-        #   xorg.libXfixes
-        #   udev
-        #   dbus
-        #   wayland
-        #   wayland-protocols
-        # ]);
+        name = "zigmarkdoc";
+        packages = [
+          zls-overlay.packages.x86_64-linux."0.15.0"
+          zigPackage
+        ];
       };
     });
 }
