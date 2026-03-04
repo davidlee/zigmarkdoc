@@ -33,6 +33,9 @@ Single-file operation only:
 ## Installation
 
 ```bash
+# Nix (flake)
+nix profile install github:davidlee/zigmarkdoc
+
 # From source (requires Zig 0.15.2+)
 zig build -Doptimize=ReleaseSafe
 
